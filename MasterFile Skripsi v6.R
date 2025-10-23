@@ -615,10 +615,9 @@ if(!is.null(dstlt_fit_female) && !is.null(cbd_fit_female)) {
     pred_error_data <- dstlt_cbd_result$data
     error_summary <- pred_error_data %>%
       group_by(Cohort) %>%
-      summarise(DSTLT_MAE = mean(abs(qx_dstlt - qx_observed), na.rm = TRUE),
-                DSTLT_RMSE = sqrt(mean((qx_dstlt - qx_observed)^2, na.rm = TRUE)),
-                CBD_MAE = mean(abs(qx_cbd - qx_observed), na.rm = TRUE),
-                CBD_RMSE = sqrt(mean((qx_cbd - qx_observed)^2, na.rm = TRUE)), .groups = 'drop')
+      summarise(DSTLT_SSE = sum((qx_dstlt - qx_observed)^2, na.rm = TRUE),
+                CBD_SSE = sum((qx_cbd - qx_observed)^2, na.rm = TRUE),
+                .groups = 'drop')
   }
 }
 
@@ -657,8 +656,28 @@ if(!is.null(dstlt_fit_female)) {
 }
 
 if(exists("error_summary")) {
-  cat("\nTabel 8 - Error Prediksi:\n")
+  cat("\nTabel 8 - Error Prediksi (SSE):\n")
   print(error_summary)
+
+  # Total SSE
+  total_dstlt_sse <- sum(error_summary$DSTLT_SSE, na.rm = TRUE)
+  total_cbd_sse <- sum(error_summary$CBD_SSE, na.rm = TRUE)
+
+  cat("\nTotal SSE (semua cohort test):\n")
+  cat(sprintf("  DSTLT: %.4f\n", total_dstlt_sse))
+  cat(sprintf("  CBD:   %.4f\n", total_cbd_sse))
+
+  best_overall <- ifelse(total_dstlt_sse < total_cbd_sse, "DSTLT", "CBD")
+  cat(sprintf("\n✓ Model terbaik overall: %s\n", best_overall))
+
+  # Tampilkan model terbaik per cohort
+  cat("\nModel terbaik per cohort (berdasarkan SSE terendah):\n")
+  for(i in 1:nrow(error_summary)) {
+    cohort <- error_summary$Cohort[i]
+    best_model <- ifelse(error_summary$DSTLT_SSE[i] < error_summary$CBD_SSE[i], "DSTLT", "CBD")
+    best_sse <- min(error_summary$DSTLT_SSE[i], error_summary$CBD_SSE[i])
+    cat(sprintf("  Cohort %d: %s (SSE = %.4f)\n", cohort, best_model, best_sse))
+  }
 }
 
 
