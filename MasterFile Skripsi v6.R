@@ -511,7 +511,88 @@ create_parameter_trends_plot <- function(data, cohorts, sex = "Female") {
 }
 
 # PERBANDINGAN DSTLT vs CBD
-# NOTE: Fungsi ini didefinisikan ulang di bawah (line ~639) dengan error handling yang lebih baik
+create_dstlt_cbd_comparison_plot <- function(dstlt_model, cbd_model, test_data, test_cohorts, training_cohorts) {
+  if(is.null(dstlt_model) || is.null(cbd_model)) return(NULL)
+
+  pred_results <- list()
+  n_training <- length(training_cohorts)  # 9 untuk kohor 1893-1901
+
+  cat("Memprediksi kohor test:\n")
+
+  for(i in seq_along(test_cohorts)) {
+    cohort <- test_cohorts[i]
+    cohort_data <- test_data %>% filter(Cohort == cohort)
+    if(nrow(cohort_data) == 0) next
+
+    cat(sprintf("  Kohor %d (i=%d, t=%d)...", cohort, i, n_training + i))
+
+    # Parameter t untuk predict.dstlt:
+    # t=1 → kohor training pertama (1893)
+    # t=n_training → kohor training terakhir (1901)
+    # t=n_training+1 → kohor test pertama (1902)
+    # t=n_training+i → kohor test ke-i
+    dstlt_pred <- tryCatch({
+      result <- predict.dstlt(dstlt_model, newdata = cohort_data$Age, t = n_training + i)
+      cat(" DSTLT OK")
+      result
+    }, error = function(e) {
+      cat(" DSTLT GAGAL - Error:", e$message)
+      rep(NA, nrow(cohort_data))
+    })
+
+    # Prediksi CBD
+    # forecast_period=i → periode forecast ke-i (untuk kohor test ke-i)
+    cbd_pred <- tryCatch({
+      result <- predict.cbd(cbd_model, newdata = cohort_data$Age, forecast_period = i)
+      cat(", CBD OK\n")
+      result
+    }, error = function(e) {
+      cat(", CBD GAGAL - Error:", e$message, "\n")
+      rep(NA, nrow(cohort_data))
+    })
+
+    pred_results[[paste0("cohort_", cohort)]] <- data.frame(
+      Age = cohort_data$Age,
+      qx_observed = cohort_data$qx,
+      qx_dstlt = dstlt_pred,
+      qx_cbd = cbd_pred,
+      Cohort = cohort,
+      lx = cohort_data$lx
+    )
+  }
+
+  if(length(pred_results) == 0) return(NULL)
+
+  all_pred <- do.call(rbind, pred_results)
+
+  # Debug: Cek apakah ada nilai yang aneh
+  cat("\nDEBUG - Statistik prediksi:\n")
+  cat("  DSTLT range:", min(all_pred$qx_dstlt, na.rm=T), "-", max(all_pred$qx_dstlt, na.rm=T), "\n")
+  cat("  CBD range:", min(all_pred$qx_cbd, na.rm=T), "-", max(all_pred$qx_cbd, na.rm=T), "\n")
+  cat("  Observed range:", min(all_pred$qx_observed, na.rm=T), "-", max(all_pred$qx_observed, na.rm=T), "\n")
+
+  pred_long <- all_pred %>%
+    select(Age, qx_observed, qx_dstlt, qx_cbd, Cohort, lx) %>%
+    pivot_longer(cols = c(qx_dstlt, qx_cbd), names_to = "Model", values_to = "qx_pred") %>%
+    mutate(Model = case_when(Model == "qx_dstlt" ~ "DSTLT", Model == "qx_cbd" ~ "CBD", TRUE ~ Model)) %>%
+    filter(!is.na(qx_pred))
+
+  p <- ggplot() +
+    geom_point(data = all_pred, aes(x = Age, y = qx_observed, size = log(lx + 1)),
+               alpha = 0.6, shape = 1, color = "grey50") +
+    geom_line(data = pred_long, aes(x = Age, y = qx_pred, color = Model), linewidth = 1) +
+    facet_wrap(~Cohort, scales = "free_y", nrow = 2) +
+    scale_color_manual(name = "Model", values = c("DSTLT" = "red", "CBD" = "blue")) +
+    scale_size_continuous(guide = "none") +
+    labs(title = "Perbandingan Prediksi DSTLT vs CBD",
+         subtitle = paste("Kohor Test Wanita Belanda", min(test_cohorts), "-", max(test_cohorts)),
+         x = "Usia", y = "qx") +
+    theme_bw() +
+    theme(legend.position = "bottom")
+
+  return(list(plot = p, data = all_pred))
+}
+
 
 # GENERATE PLOTS DAN TABEL
 if(length(unique(data_females$Cohort)) >= 3) {
@@ -579,102 +660,6 @@ if(exists("error_summary")) {
   cat("\nTabel 8 - Error Prediksi:\n")
   print(error_summary)
 }
-
-
-
-
-create_dstlt_cbd_comparison_plot <- function(dstlt_model, cbd_model, test_data, test_cohorts, training_cohorts) {
-  if(is.null(dstlt_model) || is.null(cbd_model)) return(NULL)
-
-  pred_results <- list()
-  n_training <- length(training_cohorts)  # 9 untuk kohor 1893-1901
-  
-  cat("Memprediksi kohor test:\n")
-  
-  for(i in seq_along(test_cohorts)) {
-    cohort <- test_cohorts[i]
-    cohort_data <- test_data %>% filter(Cohort == cohort)
-    if(nrow(cohort_data) == 0) next
-
-    cat(sprintf("  Kohor %d (i=%d, t=%d)...", cohort, i, n_training + i))
-
-    # Parameter t untuk predict.dstlt:
-    # t=1 → kohor training pertama (1893)
-    # t=n_training → kohor training terakhir (1901)
-    # t=n_training+1 → kohor test pertama (1902)
-    # t=n_training+i → kohor test ke-i
-    dstlt_pred <- tryCatch({
-      result <- predict.dstlt(dstlt_model, newdata = cohort_data$Age, t = n_training + i)
-      cat(" DSTLT OK")
-      result
-    }, error = function(e) {
-      cat(" DSTLT GAGAL - Error:", e$message)
-      rep(NA, nrow(cohort_data))
-    })
-    
-    # Prediksi CBD
-    # forecast_period=i → periode forecast ke-i (untuk kohor test ke-i)
-    cbd_pred <- tryCatch({
-      result <- predict.cbd(cbd_model, newdata = cohort_data$Age, forecast_period = i)
-      cat(", CBD OK\n")
-      result
-    }, error = function(e) {
-      cat(", CBD GAGAL - Error:", e$message, "\n")
-      rep(NA, nrow(cohort_data))
-    })
-    
-    pred_results[[paste0("cohort_", cohort)]] <- data.frame(
-      Age = cohort_data$Age, 
-      qx_observed = cohort_data$qx, 
-      qx_dstlt = dstlt_pred,
-      qx_cbd = cbd_pred, 
-      Cohort = cohort, 
-      lx = cohort_data$lx
-    )
-  }
-  
-  if(length(pred_results) == 0) return(NULL)
-  
-  all_pred <- do.call(rbind, pred_results)
-  
-  # Debug: Cek apakah ada nilai yang aneh
-  cat("\nDEBUG - Statistik prediksi:\n")
-  cat("  DSTLT range:", min(all_pred$qx_dstlt, na.rm=T), "-", max(all_pred$qx_dstlt, na.rm=T), "\n")
-  cat("  CBD range:", min(all_pred$qx_cbd, na.rm=T), "-", max(all_pred$qx_cbd, na.rm=T), "\n")
-  cat("  Observed range:", min(all_pred$qx_observed, na.rm=T), "-", max(all_pred$qx_observed, na.rm=T), "\n")
-  
-  pred_long <- all_pred %>%
-    select(Age, qx_observed, qx_dstlt, qx_cbd, Cohort, lx) %>%
-    pivot_longer(cols = c(qx_dstlt, qx_cbd), names_to = "Model", values_to = "qx_pred") %>%
-    mutate(Model = case_when(Model == "qx_dstlt" ~ "DSTLT", Model == "qx_cbd" ~ "CBD", TRUE ~ Model)) %>%
-    filter(!is.na(qx_pred))
-  
-  p <- ggplot() +
-    geom_point(data = all_pred, aes(x = Age, y = qx_observed, size = log(lx + 1)), 
-               alpha = 0.6, shape = 1, color = "grey50") +
-    geom_line(data = pred_long, aes(x = Age, y = qx_pred, color = Model), linewidth = 1) +
-    facet_wrap(~Cohort, scales = "free_y", nrow = 2) +
-    scale_color_manual(name = "Model", values = c("DSTLT" = "red", "CBD" = "blue")) +
-    scale_size_continuous(guide = "none") +
-    labs(title = "Perbandingan Prediksi DSTLT vs CBD", 
-         subtitle = paste("Kohor Test Wanita Belanda", min(test_cohorts), "-", max(test_cohorts)),
-         x = "Usia", y = "qx") +
-    theme_bw() +
-    theme(legend.position = "bottom")
-  
-  return(list(plot = p, data = all_pred))
-}
-
-cat("\n=== INSTRUKSI PENGGUNAAN ===\n")
-cat("1. Source file ini SETELAH source kode utama Anda\n")
-cat("2. Fungsi create_dstlt_cbd_comparison_plot sudah diperbaiki dengan parameter training_cohorts\n")
-cat("3. Jalankan ulang bagian prediksi:\n\n")
-cat("   result <- create_dstlt_cbd_comparison_plot(dstlt_fit_female, cbd_fit_female, \n")
-cat("                                               data_females %>% filter(Cohort %in% test_cohorts), \n")
-cat("                                               test_cohorts, training_cohorts)\n")
-cat("   print(result$plot)\n\n")
-cat("4. Lihat output DEBUG untuk memastikan prediksi masuk akal\n")
-cat("5. Jika masih error, salin error message lengkapnya\n\n")
 
 
 
